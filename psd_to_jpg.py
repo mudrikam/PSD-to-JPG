@@ -1,4 +1,5 @@
 import sys
+import ctypes
 import os
 import sqlite3
 import json
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayo
                                QFileDialog, QTextEdit, QProgressBar, QSplitter, QHeaderView,
                                QGroupBox, QLineEdit, QMessageBox, QFrame)
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QMimeData, QMutex, QMutexLocker
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap
 import qtawesome as qta
 
 # Photoshop executable path
@@ -1304,12 +1305,27 @@ class PSDToIMGConverter(QMainWindow):
 
 
 def main():
+    # On Windows set an explicit AppUserModelID so the taskbar uses our app icon/grouping
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.example.psdtoimg")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     
-    # Set application icon
-    app.setWindowIcon(qta.icon('fa5s.image'))
-    
+    # Build a multi-size application icon from the QtAwesome glyph so Windows can show it in the taskbar
+    base_icon = qta.icon('fa5s.image', color="#FF7300")
+    app_icon = QIcon()
+    for size in (16, 32, 48, 256):
+        pm = base_icon.pixmap(size, size)
+        app_icon.addPixmap(pm)
+
+    # Apply icon to both the QApplication and the main window
+    app.setWindowIcon(app_icon)
+
     window = PSDToIMGConverter()
+    window.setWindowIcon(app_icon)
     window.show()
     
     sys.exit(app.exec())

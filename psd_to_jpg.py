@@ -15,8 +15,8 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal, QMimeData, QMutex, QMute
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QIcon, QPixmap
 import qtawesome as qta
 
-# Photoshop executable path
-PHOTOSHOP_PATH = r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe"
+# Default Photoshop executable path (fallback)
+DEFAULT_PHOTOSHOP_PATH = r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe"
 
 
 class StatusWidget(QWidget):
@@ -303,7 +303,7 @@ class ProcessingWorker(QThread):
     processing_finished = Signal()
     error_occurred = Signal(str)
     
-    def __init__(self, db_manager, files_to_process, output_path):
+    def __init__(self, db_manager, files_to_process, output_path, photoshop_path=None):
         super().__init__()
         self.db_manager = db_manager
         self.files_to_process = files_to_process
@@ -311,6 +311,8 @@ class ProcessingWorker(QThread):
         self.should_stop = False
         self.jsx_generator = JSXGenerator()
         self.mutex = QMutex()
+        # Use provided path or fall back to default
+        self.photoshop_path = photoshop_path or DEFAULT_PHOTOSHOP_PATH
     
     def stop_processing(self):
         with QMutexLocker(self.mutex):
@@ -371,8 +373,9 @@ class ProcessingWorker(QThread):
                         
                         print(f"💻 [WORKER] Starting Photoshop process...")
                         # Run JSX script and wait for completion
+                        # Launch Photoshop with the generated JSX script
                         process = subprocess.Popen([
-                            PHOTOSHOP_PATH,
+                            self.photoshop_path,
                             str(jsx_path_abs)
                         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         
@@ -629,8 +632,37 @@ class PSDToIMGConverter(QMainWindow):
         super().__init__()
         self.db_manager = DatabaseManager()
         self.processing_worker = None
+        # config holder and path
+        self.config_path = Path(__file__).parent / 'config.json'
+        self.photoshop_path = DEFAULT_PHOTOSHOP_PATH
+        # load existing config before building UI so values can be shown
+        self.load_config()
         self.init_ui()
         self.load_data()
+
+    def load_config(self):
+        """Load JSON configuration (photoshop path, etc.)"""
+        try:
+            if self.config_path.exists():
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+                    pp = cfg.get('photoshop_path')
+                    if pp:
+                        self.photoshop_path = pp
+        except Exception as e:
+            print(f"⚠️ [CONFIG] Could not load config: {e}")
+
+    def save_config(self):
+        """Persist current configuration to JSON"""
+        try:
+            cfg = {
+                'photoshop_path': self.photoshop_path
+            }
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=2)
+            print(f"✅ [CONFIG] Saved config to {self.config_path}")
+        except Exception as e:
+            print(f"❌ [CONFIG] Failed saving config: {e}")
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -730,6 +762,26 @@ class PSDToIMGConverter(QMainWindow):
         path_layout.addLayout(output_layout)
         path_group.setLayout(path_layout)
         main_layout.addWidget(path_group)
+
+        # Photoshop exe selection
+        photoshop_layout = QHBoxLayout()
+        photoshop_layout.addWidget(QLabel("Photoshop Executable:"))
+        self.photoshop_path_edit = QLineEdit()
+        self.photoshop_path_edit.setPlaceholderText("Select Photoshop executable...")
+        self.photoshop_path_edit.setReadOnly(True)
+        photoshop_layout.addWidget(self.photoshop_path_edit)
+
+        self.paste_photoshop_btn = QPushButton("Paste")
+        self.paste_photoshop_btn.setIcon(qta.icon('fa5s.paste'))
+        self.paste_photoshop_btn.clicked.connect(self.paste_photoshop_path)
+        photoshop_layout.addWidget(self.paste_photoshop_btn)
+
+        self.select_photoshop_btn = QPushButton("Select Photoshop")
+        self.select_photoshop_btn.setIcon(qta.icon('fa5s.desktop'))
+        self.select_photoshop_btn.clicked.connect(self.select_photoshop_path)
+        photoshop_layout.addWidget(self.select_photoshop_btn)
+
+        main_layout.addLayout(photoshop_layout)
         
         # Top section: Drop area and output path
         top_layout = QVBoxLayout()
@@ -959,6 +1011,27 @@ class PSDToIMGConverter(QMainWindow):
             self.log(f"Output folder pasted: {folder_path}")
         else:
             QMessageBox.warning(self, "Warning", "Clipboard does not contain a valid folder path!")
+
+    def paste_photoshop_path(self):
+        """Paste Photoshop executable path from clipboard and save to config"""
+        clipboard = QApplication.clipboard()
+        exe_path = clipboard.text().strip()
+        if exe_path and Path(exe_path).exists():
+            self.photoshop_path = exe_path
+            self.photoshop_path_edit.setText(exe_path)
+            self.save_config()
+            self.log(f"Photoshop path pasted: {exe_path}")
+        else:
+            QMessageBox.warning(self, "Warning", "Clipboard does not contain a valid executable path!")
+
+    def select_photoshop_path(self):
+        """Select Photoshop executable manually"""
+        file, _ = QFileDialog.getOpenFileName(self, "Select Photoshop Executable", "", "Executables (*.exe);;All Files (*)")
+        if file:
+            self.photoshop_path = file
+            self.photoshop_path_edit.setText(file)
+            self.save_config()
+            self.log(f"Photoshop path selected: {file}")
     
     def select_source_folder(self):
         """Select source folder containing PSD files"""
@@ -1019,6 +1092,13 @@ class PSDToIMGConverter(QMainWindow):
         output_path = self.db_manager.get_setting('output_path', '')
         if output_path:
             self.output_path_edit.setText(output_path)
+
+        # Load photoshop path into UI (from config)
+        try:
+            if hasattr(self, 'photoshop_path_edit'):
+                self.photoshop_path_edit.setText(self.photoshop_path or "")
+        except Exception:
+            pass
         
         # Load files
         files = self.db_manager.get_file_paths()
@@ -1092,6 +1172,11 @@ class PSDToIMGConverter(QMainWindow):
             print("⚠️ [UI] No output path selected")
             QMessageBox.warning(self, "Warning", "Please select an output folder first!")
             return
+
+        # Validate photoshop executable
+        if not self.photoshop_path or not Path(self.photoshop_path).exists():
+            QMessageBox.warning(self, "Warning", "Please select a valid Photoshop executable first!")
+            return
         
         files = self.db_manager.get_file_paths()
         # Process all files except completed ones
@@ -1114,6 +1199,11 @@ class PSDToIMGConverter(QMainWindow):
         if not output_path:
             print("⚠️ [UI] No output path selected")
             QMessageBox.warning(self, "Warning", "Please select an output folder first!")
+            return
+
+        # Validate photoshop executable
+        if not self.photoshop_path or not Path(self.photoshop_path).exists():
+            QMessageBox.warning(self, "Warning", "Please select a valid Photoshop executable first!")
             return
         
         files = self.db_manager.get_file_paths()
@@ -1148,7 +1238,8 @@ class PSDToIMGConverter(QMainWindow):
         print(f"📊 [UI] Progress: {completed_files}/{total_files} files completed")
         
         self.processing_worker = ProcessingWorker(self.db_manager, files_to_process, 
-                                                  self.output_path_edit.text().strip())
+                              self.output_path_edit.text().strip(),
+                              photoshop_path=self.photoshop_path)
         self.processing_worker.progress_updated.connect(self.log)
         self.processing_worker.file_completed.connect(self.on_file_completed)
         self.processing_worker.processing_finished.connect(self.on_processing_finished)

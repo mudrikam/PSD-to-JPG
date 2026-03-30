@@ -351,6 +351,9 @@ class ProcessingWorker(QThread):
                 jsx_path = Path("script") / jsx_filename
                 
                 try:
+                    # Ensure script folder exists
+                    jsx_path.parent.mkdir(parents=True, exist_ok=True)
+                    
                     jsx_content = self.jsx_generator.generate_jsx_content(file_path, self.output_path)
                     
                     with open(jsx_path, 'w', encoding='utf-8') as f:
